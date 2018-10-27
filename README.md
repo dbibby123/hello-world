@@ -1,3 +1,3 @@
 # hello-world
-lets get in here
-adding some new txt into the system now
+Hey there, starting to write some new code
+adding some a new branch into the program now
