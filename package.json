@@ -1,0 +1,30 @@
+{
+  "name": "ocpp-platform",
+  "version": "1.0.0",
+  "description": "Enterprise OCPP 2.x Charging Station Management System — supports 10,000+ EV chargers",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "shared/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "migrate": "turbo run migrate"
+  },
+  "devDependencies": {
+    "turbo": "^1.13.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@ocpp-platform/meter-service",
+  "version": "1.0.0",
+  "description": "Meter value ingestion and time-series storage — processes MeterValues and TransactionEvent meter readings",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "@influxdata/influxdb-client": "^1.33.2",
+    "pino": "^8.19.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "ts-node-dev": "^2.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4"
+  }
+}

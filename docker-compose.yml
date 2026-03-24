@@ -1,0 +1,251 @@
+version: '3.9'
+
+# ─── OCPP Platform — Local Development Stack ─────────────────────────────────
+#
+# Starts the full platform locally:
+#   - Infrastructure: PostgreSQL, Redis, Kafka, InfluxDB
+#   - Microservices: OCPP Gateway, Auth, Transaction, Meter, Smart Charging,
+#                    Billing, OCPI Connector, API Gateway
+#
+# Usage:
+#   docker compose up -d              # Start all
+#   docker compose logs -f gateway    # Stream logs from gateway
+#   docker compose down -v            # Stop and remove volumes
+
+services:
+
+  # ─── Infrastructure ──────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ocpp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/db/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168   # 7 days
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminpassword
+      DOCKER_INFLUXDB_INIT_ORG: ocpp-platform
+      DOCKER_INFLUXDB_INIT_BUCKET: meter-values
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: dev-token
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+
+  # ─── Microservices ───────────────────────────────────────────────────────
+
+  gateway:
+    build:
+      context: .
+      dockerfile: packages/ocpp-gateway/Dockerfile
+    ports:
+      - "9000:9000"   # OCPP WebSocket
+      - "9001:9001"   # Health / metrics
+    environment:
+      NODE_ENV: development
+      GATEWAY_PORT: "9000"
+      HEALTH_PORT: "9001"
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:29092
+      NODE_ID: gateway-1
+      HEARTBEAT_INTERVAL: "300"
+      TLS_ENABLED: "false"
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: packages/auth-service/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ocpp
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:29092
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: packages/transaction-service/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ocpp
+      KAFKA_BROKERS: kafka:29092
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  meter-service:
+    build:
+      context: .
+      dockerfile: packages/meter-service/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:29092
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: dev-token
+      INFLUX_ORG: ocpp-platform
+      INFLUX_BUCKET: meter-values
+      LOG_LEVEL: info
+    depends_on:
+      - kafka
+      - influxdb
+    restart: unless-stopped
+
+  smart-charging:
+    build:
+      context: .
+      dockerfile: packages/smart-charging/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ocpp
+      KAFKA_BROKERS: kafka:29092
+      REBALANCE_INTERVAL_MS: "60000"
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  billing-service:
+    build:
+      context: .
+      dockerfile: packages/billing-service/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ocpp
+      KAFKA_BROKERS: kafka:29092
+      STRIPE_SECRET_KEY: sk_test_placeholder
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ocpi-connector:
+    build:
+      context: .
+      dockerfile: packages/ocpi-connector/Dockerfile
+    ports:
+      - "3002:3002"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ocpp
+      OCPI_PORT: "3002"
+      OCPI_BASE_URL: http://localhost:3002
+      OCPI_COUNTRY_CODE: US
+      OCPI_PARTY_ID: OPP
+      OCPI_OPERATOR_NAME: OCPP Platform
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: packages/api-gateway/Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ocpp
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:29092
+      API_PORT: "3001"
+      JWT_SECRET: dev-jwt-secret-change-in-production
+      ALLOWED_ORIGINS: http://localhost:3000
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Developer Tools ─────────────────────────────────────────────────────
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    depends_on:
+      - kafka
+
+volumes:
+  postgres_data:
+  redis_data:
+  influxdb_data:
